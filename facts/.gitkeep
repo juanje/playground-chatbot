@@ -1,0 +1,4 @@
+# This directory contains fact files for the agent
+# Facts are markdown files with YAML frontmatter
+# See README for format details
+

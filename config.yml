@@ -1,0 +1,71 @@
+# Playground Chatbot Configuration
+# Copy this file to config.yml and customize as needed.
+#
+# This file is loaded automatically if present.
+# API keys should be in .env, not here.
+
+# =============================================================================
+# LLM Configuration
+# =============================================================================
+# llm_model: gemini-2.5-flash      # Model for responses
+# llm_temperature: 0.3             # Creativity (0.0 - 1.0)
+# llm_reasoning_effort: medium     # low, medium, high
+
+# =============================================================================
+# Classifier Configuration (for routing queries)
+# =============================================================================
+# classifier_model: gemini-2.5-flash
+# classifier_temperature: 0.0
+# classifier_reasoning_effort: low
+
+# =============================================================================
+# Middleware Configuration
+# =============================================================================
+# include_datetime: true           # Inject current datetime into prompts
+
+# Task Planning (for supervisor coordination)
+enable_todo: true               # Enable for supervisor (default: true)
+
+# Agent-specific middleware (disabled by default for agents)
+# Enable only for agents that need complex task planning:
+toolbox_agent:
+  enable_todo: true  # Enable task planning for this specific agent
+
+# Context summarization (for long conversations)
+# summarization_enabled: false
+# summarization_trigger_tokens: 100000
+# summarization_keep_messages: 6
+
+# =============================================================================
+# Agent Execution Configuration
+# =============================================================================
+# recursion_limit: 50             # Max iterations for agent tool calls
+# Use higher values (100+) for complex workflows with many agents/steps
+
+# =============================================================================
+# Web Server Configuration (for macsdk web interface)
+# =============================================================================
+# server_host: 0.0.0.0
+# server_port: 8000
+# message_max_length: 5000
+# warmup_timeout: 15.0
+
+# =============================================================================
+# Debug Configuration
+# =============================================================================
+# debug: false                # Enable debug mode (shows prompts sent to LLM)
+# Use --debug flag with chat/web commands, or set debug: true here
+
+# =============================================================================
+# Custom Settings
+# =============================================================================
+# Add your chatbot-specific settings below:
+# my_custom_setting: value
+
+# Skills directory (relative to project root or absolute path)
+# Default: skills/ (in project root)
+# skills_dir: skills
+
+# Facts directory (relative to project root or absolute path)
+# Default: facts/ (in project root)
+# facts_dir: facts
