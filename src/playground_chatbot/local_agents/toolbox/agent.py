@@ -184,21 +184,15 @@ class ToolboxAgent:
         agent_instance = self
 
         @tool
-        async def invoke_toolbox(
+        async def toolbox(
             query: str,
             config: Annotated[RunnableConfig, InjectedToolArg],
         ) -> str:
-            """Invoke the toolbox agent for DevOps monitoring.
-
-            Use this for:
-            - Service health checks
-            - Pipeline and deployment status
-            - Alert monitoring
-            - Log analysis
+            """Query this specialist agent with a natural language request.
 
             Args:
-                query: The query to process.
-                config: Runnable configuration (injected).
+                query: What you want this agent to do or find out.
+                config: Runnable configuration (injected automatically).
 
             Returns:
                 The agent's response text.
@@ -206,4 +200,4 @@ class ToolboxAgent:
             result = await agent_instance.run(query, run_config=config)
             return str(result["response"])
 
-        return invoke_toolbox
+        return toolbox
