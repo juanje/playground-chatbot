@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from typing import Any
+
+import yaml
+from langchain_core.tools import tool
+from simpleeval import simple_eval  # type: ignore[import-untyped]
 
 # Import generic tools from MACSDK
 from macsdk.tools import api_get, fetch_file
-from langchain_core.tools import tool
-from simpleeval import simple_eval  # type: ignore[import-untyped]
 
 from playground_chatbot.config import config
 
@@ -55,8 +58,38 @@ def _ensure_api_registered() -> None:
 # =============================================================================
 
 
-def _parse_frontmatter(content: str) -> tuple[dict[str, str], str]:
+def _safe_path(base_dir: Path, relative_path: str) -> Path:
+    """Resolve a path safely, preventing directory traversal attacks.
+
+    Args:
+        base_dir: The base directory that paths must stay within.
+        relative_path: The user-provided relative path.
+
+    Returns:
+        The resolved absolute path.
+
+    Raises:
+        ValueError: If the path attempts to escape the base directory.
+    """
+    # Resolve both paths to absolute
+    base_resolved = base_dir.resolve()
+    target_resolved = (base_dir / relative_path).resolve()
+
+    # Ensure the target is within the base directory
+    if not str(target_resolved).startswith(str(base_resolved)):
+        raise ValueError(f"Path traversal detected: '{relative_path}'")
+
+    return target_resolved
+
+
+def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     """Parse YAML frontmatter from markdown content.
+
+    Uses yaml.safe_load for robust parsing, supporting:
+    - Values with colons
+    - Quoted strings
+    - Multi-line values
+    - Nested YAML structures
 
     Expected format:
     ---
@@ -71,36 +104,36 @@ def _parse_frontmatter(content: str) -> tuple[dict[str, str], str]:
     Returns:
         Tuple of (frontmatter_dict, content_without_frontmatter).
     """
-    lines = content.split("\n")
-
     # Check if file starts with frontmatter delimiter
-    if not lines or lines[0].strip() != "---":
+    if not content.startswith("---\n") and not content.startswith("---\r\n"):
         return {}, content
 
-    # Find the closing delimiter
-    frontmatter_lines = []
-    content_start = 0
+    # Find the closing delimiter (skip first line)
+    lines = content.split("\n")
+    end_index = -1
 
     for i, line in enumerate(lines[1:], start=1):
         if line.strip() == "---":
-            content_start = i + 1
+            end_index = i
             break
-        frontmatter_lines.append(line)
 
-    # Parse frontmatter (simple YAML parser for key: value pairs)
-    frontmatter = {}
-    for line in frontmatter_lines:
-        if ":" in line:
-            key, value = line.split(":", 1)
-            frontmatter[key.strip()] = value.strip()
+    if end_index == -1:
+        return {}, content
 
-    # Get content without frontmatter
-    content_without_frontmatter = "\n".join(lines[content_start:]).strip()
+    # Extract and parse frontmatter
+    frontmatter_text = "\n".join(lines[1:end_index])
+    content_without = "\n".join(lines[end_index + 1 :]).strip()
 
-    return frontmatter, content_without_frontmatter
+    try:
+        frontmatter = yaml.safe_load(frontmatter_text) or {}
+    except yaml.YAMLError:
+        # Fall back to empty frontmatter on parse error
+        frontmatter = {}
+
+    return frontmatter, content_without
 
 
-def _read_file_content(file_path: Path) -> tuple[dict[str, str], str]:
+def _read_file_content(file_path: Path) -> tuple[dict[str, Any], str]:
     """Read a file and return its frontmatter and content.
 
     Args:
@@ -115,10 +148,62 @@ def _read_file_content(file_path: Path) -> tuple[dict[str, str], str]:
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
 
-    with open(file_path, "r") as f:
+    with open(file_path, "r", encoding="utf-8") as f:
         content = f.read()
 
     return _parse_frontmatter(content)
+
+
+def _list_documents(directory: Path) -> list[dict[str, str]]:
+    """List markdown documents with frontmatter in a directory.
+
+    Searches recursively for .md files and extracts their metadata
+    from YAML frontmatter.
+
+    Args:
+        directory: The directory to search.
+
+    Returns:
+        List of documents with name, description, and path.
+    """
+    documents = []
+    for file in directory.rglob("*.md"):
+        try:
+            frontmatter, _ = _read_file_content(file)
+            if "name" in frontmatter:
+                relative_path = file.relative_to(directory)
+                documents.append(
+                    {
+                        "name": str(frontmatter.get("name", "")),
+                        "description": str(frontmatter.get("description", "")),
+                        "path": str(relative_path),
+                    }
+                )
+        except Exception:
+            # Skip files that can't be read
+            continue
+    return documents
+
+
+def _read_document(base_dir: Path, path: str, doc_type: str) -> str:
+    """Read a document safely, with LLM-friendly error messages.
+
+    Args:
+        base_dir: The base directory for the document type.
+        path: The relative path to the document.
+        doc_type: The type of document (for error messages).
+
+    Returns:
+        The document content, or an error message if not found.
+    """
+    try:
+        file_path = _safe_path(base_dir, path)
+        _, content = _read_file_content(file_path)
+        return content
+    except FileNotFoundError:
+        return f"Error: {doc_type.capitalize()} '{path}' not found. Use list_{doc_type}s() to see available {doc_type}s."
+    except ValueError as e:
+        return f"Error: Invalid path - {e}"
 
 
 # =============================================================================
@@ -193,6 +278,14 @@ def calculate(expression: str) -> str:
         calculate("(1000 * 0.15) + 500") → "650.0"
         calculate("factorial(5)") → "120"
     """
+    # Validate input
+    if not expression or not expression.strip():
+        return (
+            "Error: Empty expression provided. Please provide a valid math expression."
+        )
+
+    expression = expression.strip()
+
     try:
         # Use simpleeval with custom functions and names
         result = simple_eval(
@@ -201,8 +294,14 @@ def calculate(expression: str) -> str:
             names=SAFE_CONSTANTS,
         )
         return str(result)
+    except ZeroDivisionError:
+        return f"Error: Division by zero in expression '{expression}'"
+    except NameError as e:
+        return f"Error: Unknown function or variable in '{expression}' - {e}"
+    except SyntaxError:
+        return f"Error: Invalid syntax in expression '{expression}'"
     except Exception as e:
-        return f"Calculation error: {e}"
+        return f"Error: Cannot evaluate '{expression}' - {e}"
 
 
 @tool
@@ -219,25 +318,7 @@ def list_skills() -> list[dict[str, str]]:
     Returns:
         List of available skills with name, description, and path (relative to skills directory).
     """
-    skills = []
-    # Search recursively for all .md files
-    for file in SKILLS_DIR.rglob("*.md"):
-        try:
-            frontmatter, _ = _read_file_content(file)
-            if "name" in frontmatter:
-                # Get path relative to SKILLS_DIR
-                relative_path = file.relative_to(SKILLS_DIR)
-                skills.append(
-                    {
-                        "name": frontmatter.get("name", ""),
-                        "description": frontmatter.get("description", ""),
-                        "path": str(relative_path),
-                    }
-                )
-        except Exception:
-            # Skip files that can't be read
-            continue
-    return skills
+    return _list_documents(SKILLS_DIR)
 
 
 @tool
@@ -251,25 +332,7 @@ def list_facts() -> list[dict[str, str]]:
     Returns:
         List of available facts with name, description, and path (relative to facts directory).
     """
-    facts = []
-    # Search recursively for all .md files
-    for file in FACTS_DIR.rglob("*.md"):
-        try:
-            frontmatter, _ = _read_file_content(file)
-            if "name" in frontmatter:
-                # Get path relative to FACTS_DIR
-                relative_path = file.relative_to(FACTS_DIR)
-                facts.append(
-                    {
-                        "name": frontmatter.get("name", ""),
-                        "description": frontmatter.get("description", ""),
-                        "path": str(relative_path),
-                    }
-                )
-        except Exception:
-            # Skip files that can't be read
-            continue
-    return facts
+    return _list_documents(FACTS_DIR)
 
 
 @tool
@@ -289,9 +352,7 @@ def read_skill(path: str) -> str:
     Returns:
         Complete instructions and guidelines for performing the task.
     """
-    file_path = SKILLS_DIR / path
-    _, content = _read_file_content(file_path)
-    return content
+    return _read_document(SKILLS_DIR, path, "skill")
 
 
 @tool
@@ -309,9 +370,7 @@ def read_fact(path: str) -> str:
     Returns:
         Detailed information and context about the topic.
     """
-    file_path = FACTS_DIR / path
-    _, content = _read_file_content(file_path)
-    return content
+    return _read_document(FACTS_DIR, path, "fact")
 
 
 def get_tools() -> list:
